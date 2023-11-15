@@ -1,0 +1,356 @@
+---
+header-includes:
+- \usepackage{longtable}
+- \usepackage[utf8]{inputenc}
+- \usepackage[spanish]{babel}\decimalpoint
+- \setlength{\parindent}{1.25cm}
+- \usepackage{amsmath}
+- \usepackage{xcolor}
+- \usepackage{cancel}
+- \usepackage{array}
+- \usepackage{float}
+- \usepackage{multirow}
+output:
+  pdf_document: 
+    number_sections: yes
+fontsize: 12pt
+papersize: letter
+geometry: margin = 1in
+language: "es"
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, fig.align = "center",
+                      fig.height = 4.5, fig.pos = "H")
+
+library(tidyverse)
+library(tseries)
+library(dplyr)
+library(gridExtra)
+library(cowplot)
+library(kableExtra)
+library(GGally)
+library(knitr)
+library(strucchange)
+library(Metrics)
+library(forecast)
+library(ggplot2)
+```
+
+```{=tex}
+\input{titlepage}
+\thispagestyle{empty}
+\tableofcontents
+\newpage
+\thispagestyle{empty}
+\listoffigures
+\newpage
+```
+
+```{=tex}
+\pagestyle{myheadings}
+\setcounter{page}{4}
+```
+
+```{r, include=FALSE}
+medidas = function(m,y,k){
+# m = objeto producido con lm()
+# y = variable dependiente
+# k = número de coeficientes beta
+T = length(y)
+yest = fitted(m)
+sse = sum((yest-y)^2)
+ssr = sum((y-mean(y))^2) 
+mse = sse/(T-k)
+R2 = 1 - sse/ssr
+Ra2 = 1 - (T-1)*(1-R2)/(T-k)
+aic = log((T-k)*exp(2*k/T)*mse/T)
+bic = log(T^(k/T)*(T-k)*mse/T)
+M = c(mse,sqrt(mse),Ra2,  aic, bic)
+names(M) = c("mse","rmse","R2-ad","log.aic","log.bic")
+return(M)
+}
+```
+
+```{r,include=FALSE}
+calcular_metricas <- function ( predichos , observados ) {
+  rmse <- sqrt ( mean (( predichos - observados ) ^2) )
+  mae <- mean (abs( predichos - observados ) )
+  mape <- mean ( abs (( predichos - observados ) / observados ) ) * 100
+  u_theil <- sqrt ( mean (( predichos - observados ) ^2) ) / sqrt ( mean ( observados
+                                                                           ^2) )
+  resultados <- data.frame ( RMSE = rmse , MAE = mae , MAPE = mape ,
+                             U_Theil = u_theil )
+  return ( resultados )
+}
+
+calculate_mape <- function(actual, predicted) {
+  mean(abs((actual - predicted) / actual)) * 100
+}
+```
+
+
+```{r, include=FALSE}
+codensa = read.table("codensa.diaria.dat", header = TRUE, stringsAsFactors = FALSE) 
+codensa$date <- as.Date(codensa$date)
+```
+
+```{r, include=FALSE}
+codensa_1<-ts(codensa$y, frequency = 7, start = c(1995,7))
+m<-15
+n<-length(codensa_1)-m
+t<-1:n
+yf=ts(codensa_1[(n-m+1):n], frequency=7)
+T=length(codensa_1)
+tp = seq(T+1,T+m)
+```
+
+```{r,include=FALSE}
+codensa_y<-ts(codensa_1[t], freq=7, start = c(1995,7))
+It<-seasonaldummy(codensa_y)
+```
+
+Recordemos el comportamientos de nuestra serie. 
+
+```{r,echo=FALSE, fig.cap="Grafica serie de tiempo de Codensa"}
+ggplot(data = codensa, aes(x = date, y = y)) +
+  geom_line(color = "blue") + 
+  labs(x = "Fecha", y = "Valores") +
+  theme_minimal() +
+  ggtitle("Serie de Tiempo de Codensa")
+```
+
+
+\section{Punto 1.}
+
+\noindent
+\textbf{(33/33)} Para los residuos de este modelo reporte la gráfica de la fac con las bandas de Bartlett y la prueba de incorrelación Ljung-Box. Concluya sobre si estos residuos pueden considerarse o no ruido blanco. En caso de ser ruido blanco, considere el segundo modelo de componentes con mejor MAPE.
+
+
+
+```{r,include=FALSE}
+modelo_cubico <- lm(codensa_y ~ t + I(t^2) + I(t^3)+ It)
+summary(modelo_cubico)
+```
+
+```{r,include=FALSE}
+medidas(modelo_cubico,codensa_y, 8)
+```
+
+```{r,include=FALSE}
+# Residuos del modelo cubico
+residuos_cub <- residuals(modelo_cubico)
+```
+
+```{r,echo=FALSE, fig.cap= "Grafica de la ACF y PACF"}
+# Cálculo de la FAC y prueba de incorrelación Ljung-Box
+par(mfrow=c(2,1))
+acf(residuos_cub,lag.max = 60, ci.type = "ma", main="Autocorrelation Function (ACF)") #Bandas de Bartlett
+pacf(residuos_cub,main="Partial Autocorrelation Function (PACF)")
+```
+
+\noindent
+\textbf{Prueba de incorrelación Ljung-Box}
+
+```{r,echo=FALSE}
+lag.max <- 10
+resultado_prueba <- Box.test(residuos_cub, type = "Ljung-Box", lag = lag.max)
+resultado_prueba
+```
+
+\noindent
+El resultado de la prueba de incorrelación Ljung-Box muestra un estadístico chi-cuadrado (X-squared) de 557.88 con 10 grados de libertad y un valor p muy pequeño (< 2.2e-16). Esto indica que hay evidencia significativa de autocorrelación en los residuos del modelo. En otras palabras, los residuos no pueden considerarse como ruido blanco, ya que muestran patrones de autocorrelación.
+
+
+
+\section{Punto 2.}
+
+\noindent
+\textbf{(34/34)} Para estos residuos identifique un posible modelo ARMA-SARMA, usando la función auto.arima() de la librería forecast. Estime el modelo escogido con la función arima(). Reporte y verifique que los parámetros sean significativos y los residuos sean ruido blanco, reportando la prueba Ljung-Box.
+
+
+\noindent
+\textbf{Modelo ARMA-SARMA}
+
+```{r,echo=FALSE}
+modelo_autoarima <- auto.arima(residuos_cub, stepwise = F)
+
+modelo_autoarima
+```
+
+\noindent
+El modelo seleccionado es ARIMA(2,0,1) con un componente autorregresivo de orden 2 (AR(2)), un componente de media móvil de orden 1 (MA(1)), y un promedio de cero.
+
+```{r,echo=FALSE}
+# Estimar el modelo identificado por auto.arima
+modelo_estimado <- arima(residuos_cub, order = c(2,0,1))
+
+# Mostrar el resumen del modelo
+summary(modelo_estimado)
+```
+
+\noindent
+\textbf{Prueba de incorrelación Ljung-Box}
+
+```{r,echo=FALSE}
+# Residuos del modelo ARMA-SARMA
+residuos_modelo <- residuals(modelo_estimado)
+
+# Aplicar la prueba de Ljung-Box a los residuos
+resultado_prueba_modelo <- Box.test(residuos_modelo, type = "Ljung-Box", lag = lag.max)
+
+# Mostrar el resultado de la prueba
+resultado_prueba_modelo
+```
+
+
+\noindent
+El resultado de la prueba Ljung-Box en los residuos del modelo ARMA-SARMA muestra un estadístico chi-cuadrado (X-squared) de 9.7724 con 10 grados de libertad y un valor p de 0.4607. El valor p no es significativamente pequeño, lo que indica que no hay evidencia significativa de autocorrelación en los residuos del modelo ARMA-SARMA. Esto sugiere que los residuos del modelo se asemejan al ruido blanco.
+
+
+\section{Punto 3.}
+
+\noindent
+\textbf{(33/33)} Calcule los pronósticos para modelo ARMA-SARMA. Añadalos a los pronósticos del modelo de componentes escogido, calculados en el Trabajo No1. Reporte MAPE, RMSE, U-Theil para éstos. Y compare estas medidas con las del modelo que mejor MAPE tuvo en el Trabajo No 1. Reporte una gráfica comparativa y una conclusión.
+
+\noindent
+Recordemos las métricas de nuestro modelo de componentes escogido en el trabajo 1
+
+```{r,echo=FALSE}
+tt=seq((T-15+1),T,1)
+tt2=tt*tt
+tt3=tt*tt*tt
+Itf = seasonaldummy(codensa_y,15)
+xtf=cbind(rep(1,15),tt,Itf)
+xtf2=cbind(rep(1,15),tt, tt2,Itf)
+
+# Pronósticos para el modelo cúbico Trabajo1
+pred_cubico <- predict(modelo_cubico, data.frame(t=tt, t2=tt2, t3=tt3, It=I(Itf)))
+
+rmse_cubico <- rmse(yf, pred_cubico)
+mae_cubico <- mae(yf, pred_cubico)
+mape_cubico <- calculate_mape(yf, pred_cubico)
+u_theil_cubico <- 1 / (length(yf)) * sum(((yf - pred_cubico) ^ 2) / (yf * pred_cubico))
+
+metricas <- data.frame(
+Modelo = c("Cúbico"),
+RMSE = c(rmse_cubico), MAE = c(mae_cubico), MAPE = c(mape_cubico), U_Theil = c(u_theil_cubico))
+kable(metricas)
+#, caption = "Tabla de Resultados de metricas para el modelo cúbico"
+```
+
+\noindent
+Ahora calculamos los pronósticos para los residuos del modelo ARMA-SARMA y tendremos la siguiente gráfica.
+
+```{r,echo=FALSE, fig.cap="Grafico de predicciones del modelo ARMA-SARMA"}
+#modelo_estimado <- arima(codensa_y, order = c(2,0,1))
+#pronosticos<-predict(modelo_estimado,n.ahead=15,)$pred
+#pronosticos<-as.numeric(pronosticos)
+
+#para graficar la serie con los pronosticos
+pronosticos_fore <- forecast(modelo_estimado, 15)
+plot(pronosticos_fore)
+```
+
+\noindent
+Ahora obtengamos las métricas para el modelo Estructural + ARMA-SARMA.
+
+```{r,include=FALSE}
+yf<-as.numeric(yf)
+pronosticos<-pronosticos_fore$mean
+pronosticos<-pred_cubico+as.numeric(pronosticos)
+```
+
+```{r,echo=FALSE}
+rmse_fore <- rmse(yf, pronosticos)
+mae_fore <- mae(yf, pronosticos)
+mape_fore <- calculate_mape(yf, pronosticos)
+u_theil_fore <- 1 / (length(yf)) * sum(((yf - pronosticos) ^ 2) / (yf * pronosticos))
+
+metricas.fore <- data.frame(
+Modelo = c("Estr+ARMA-SARMA"),
+RMSE = c(rmse_fore), MAE = c(mae_fore), MAPE = c(mape_fore), U_Theil = c(u_theil_fore))
+kable(metricas.fore)
+#, caption = "Tabla de Resultados de metricas para el modelo Estr+ARMA-SARMA "
+```
+
+
+\noindent
+Aqui podemos ver que si comparamos las métricas del modelo cúbico y el modelo estructural agregando el modelo ARMA-SARMA, tenemos que todas estas métricas son menores en el segundo modelo. Por lo tanto el modelo estructural mas el modelo ARMA-SARMA supero al modelo cúbico por lo que sería el mejor modelo.
+
+\noindent
+Veamoslo mejor gráficamente.
+
+
+```{r}
+train_data <- codensa[1:(nrow(codensa) - 15), ]
+test_data <- codensa[(nrow(codensa) - 14):nrow(codensa), ]
+pred_cubico <- as.numeric(pred_cubico)
+pronosticos <- as.numeric(pronosticos)
+
+```
+
+```{r, warning=FALSE, fig.cap="Grafica de Datos Observados, Pronosticos Mod Cúbico y Pronosticos Mod Estr+ARMA-SARMA"}
+ggplot(data = codensa, aes(x = date)) +
+  geom_line(data = tail(codensa, 70), aes(y = y, color = "Observados"), size = 1) +
+  geom_line(data = test_data, aes(y = pred_cubico, color = "Modelo1"), size = 1, linetype = "dashed") +
+  geom_line(data = test_data, aes(y = pronosticos, color = "Modelo2"), size = 1, linetype = "dotted") +
+  labs(
+    x = "Tiempo",
+    y = "Valor",
+    title = "Datos Observados, Pronosticos Mod Cúbico y Pronosticos Mod Estr+ARMA-SARMA"
+  ) +
+  scale_color_manual(
+    name = "Series",
+    values = c(Observados = "blue", Modelo1 = "red", Modelo2 = "green")
+  ) +
+  theme_minimal()
+
+```
+
+
+
+\noindent
+Veamos como estas predicciones de los dos modelos son muy parecidas aunque su diferencia es en algunos decimales como lo podemos ver a continuación.
+
+\noindent
+\textbf{Modelo Cúbico}
+
+```{r,echo=FALSE}
+pred_cubico
+```
+
+
+\noindent
+\textbf{Modelo Estructural + ARMA-SARMA}
+
+
+```{r,echo=FALSE}
+pronosticos
+```
+
+
+
+
+\section{Código}
+
+\noindent
+En el siguiente link se redireccionara a un repositorio donde encuentra todo el trabajo y los codigos empleados para su solución:
+
+\noindent
+https://github.com/cristiancacz2311/Trabajo_2_Tecnicas_de_pronostico-
+
+
+
+```{r}
+
+```
+
+
+
+
+
+
